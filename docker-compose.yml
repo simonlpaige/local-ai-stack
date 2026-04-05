@@ -1,0 +1,75 @@
+version: "3.8"
+
+# Local AI Stack
+# Ollama + Open WebUI + LiteLLM proxy
+# Optimized for consumer NVIDIA GPUs (tested on dual RTX 3090s)
+
+services:
+  # ─── Ollama ───────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all          # use all available GPUs
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h    # keep models loaded
+      - OLLAMA_NUM_PARALLEL=4    # concurrent request slots
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── Open WebUI ────────────────────────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - open_webui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=true               # enable authentication
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-in-production}
+      - DEFAULT_MODELS=llama3.2:latest
+      # Optional: connect to external APIs alongside local models
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # ─── LiteLLM Proxy ────────────────────────────────────────────────────────
+  # Unified OpenAI-compatible API endpoint routing to any model/provider
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8"]
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      # Pass through any API keys for cloud providers
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      - ollama
+
+volumes:
+  ollama_data:
+  open_webui_data:

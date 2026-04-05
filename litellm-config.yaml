@@ -1,0 +1,63 @@
+# LiteLLM Proxy Configuration
+# Routes requests to local Ollama models (and optionally cloud APIs)
+# Exposes a single OpenAI-compatible endpoint at :4000
+
+model_list:
+  # ── Local Ollama Models ─────────────────────────────────────────────────────
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+  - model_name: llama3.2:3b
+    litellm_params:
+      model: ollama/llama3.2:3b
+      api_base: http://ollama:11434
+
+  - model_name: llama3.1:70b
+    litellm_params:
+      model: ollama/llama3.1:70b
+      api_base: http://ollama:11434
+
+  - model_name: mistral
+    litellm_params:
+      model: ollama/mistral
+      api_base: http://ollama:11434
+
+  - model_name: codellama
+    litellm_params:
+      model: ollama/codellama
+      api_base: http://ollama:11434
+
+  - model_name: qwen2.5-coder
+    litellm_params:
+      model: ollama/qwen2.5-coder
+      api_base: http://ollama:11434
+
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+
+  # ── Cloud Models (optional — requires API keys in .env) ──────────────────
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+
+  # - model_name: claude-sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-3-5-sonnet-20241022
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 2
+
+router_settings:
+  routing_strategy: least-busy
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: false
