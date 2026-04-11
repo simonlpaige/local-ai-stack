@@ -4,7 +4,9 @@
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docs.docker.com/compose/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA-76B900)](https://developer.nvidia.com/cuda)
 
-A production-ready Docker Compose stack for running local LLM infrastructure on consumer NVIDIA GPUs. Includes Ollama for model serving, Open WebUI for a ChatGPT-like interface, and LiteLLM as an OpenAI-compatible proxy.
+A production-ready Docker Compose stack for running local LLM infrastructure on consumer NVIDIA GPUs. Includes Ollama for model serving, Open WebUI for a ChatGPT-like interface, and an OpenAI-compatible proxy.
+
+**Currently running Gemma 4 26B (MoE, 3.8B active params) on a single RTX 4060 8GB at ~9-11 tok/s.** Powers [WaldoNet AI](https://waldonet.simonlpaige.com), a neighborhood AI cooperative in Kansas City.
 
 ## Stack
 
@@ -12,31 +14,38 @@ A production-ready Docker Compose stack for running local LLM infrastructure on 
 |---------|---------|------|
 | [Ollama](https://ollama.com) | Model serving (GPU-accelerated) | 11434 |
 | [Open WebUI](https://github.com/open-webui/open-webui) | Web chat interface | 3000 |
-| [LiteLLM](https://github.com/BerriAI/litellm) | OpenAI-compatible proxy | 4000 |
 
 ```
 Your app / OpenAI SDK
         │
         ▼
-  LiteLLM :4000          ← OpenAI-compatible API
+  Ollama :11434        ← GPU inference
         │
-        ├── ollama/llama3.2
-        ├── ollama/mistral
-        ├── ollama/qwen2.5-coder
-        └── (optional cloud: gpt-4o, claude, etc.)
-        
-  Open WebUI :3000       ← Web chat interface
+        ├── gemma4:26b (primary — 26B MoE, 3.8B active)
+        ├── nomic-embed-text (embeddings)
+        └── (any Ollama-supported model)
+
+  Open WebUI :3000     ← Web chat interface
         │
-        └── Ollama :11434 ← GPU inference
+        └── Ollama :11434
 ```
+
+## Real-World Performance (RTX 4060 8GB)
+
+| Model | VRAM | Speed | Context | Notes |
+|-------|------|-------|---------|-------|
+| gemma4:26b | ~7.8GB (partial offload) | 9-11 tok/s | 128K | Primary model, MoE architecture |
+| nomic-embed-text | ~300MB | instant | — | Embedding model for RAG |
+
+> Gemma 4 26B is a Mixture-of-Experts model with only 3.8B active parameters per forward pass, making it remarkably capable on consumer hardware. Apache 2.0 licensed.
 
 ## Requirements
 
-- Docker + Docker Compose
+- Docker + Docker Compose (or native Ollama install)
 - NVIDIA GPU with CUDA support
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (Docker path)
 
-> Works great on consumer GPUs (RTX 3060, 3090, 4090). A 24GB card can run 13B models in full precision or 70B models quantized. Two 24GB cards (e.g., dual RTX 3090) can run 70B models comfortably.
+> Works on consumer GPUs from RTX 3060 up. An 8GB card runs Gemma 4 26B comfortably. A 24GB card can run 70B quantized models.
 
 ## Quick Start
 
@@ -52,117 +61,77 @@ cp .env.example .env
 # 3. Start the stack
 docker compose up -d
 
-# 4. Pull your first model
-docker exec ollama ollama pull llama3.2
+# 4. Pull Gemma 4
+docker exec ollama ollama pull gemma4:26b
 
 # 5. Open the UI
 open http://localhost:3000
 ```
 
+## Cloudflare Tunnel (Remote Access)
+
+Expose your local stack to the internet securely:
+
+```bash
+# Install cloudflared
+# Create a tunnel
+cloudflared tunnel create my-ai-stack
+
+# Route to Open WebUI
+cloudflared tunnel route dns my-ai-stack ai.yourdomain.com
+
+# Run it
+cloudflared tunnel --url http://localhost:3000 run my-ai-stack
+```
+
+## Open WebUI Features
+
+- Knowledge bases (upload documents for RAG)
+- Model-specific system prompts and temperature presets
+- Web search integration (DuckDuckGo)
+- Multi-user with role-based access
+- Conversation history and export
+
 ## Configuration
 
 ### Environment Variables
-
-Copy `.env.example` to `.env` and configure:
 
 ```bash
 # Required
 WEBUI_SECRET_KEY=your-long-random-secret
 
-# LiteLLM API key (used by your apps to talk to the proxy)
-LITELLM_MASTER_KEY=sk-your-key
-
-# Optional: add cloud models alongside local ones
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
+# Optional: Ollama connection (if not on same host)
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-### Adding/Removing Models
+### Model Recommendations by VRAM
 
-Edit `litellm-config.yaml` to control which models the proxy exposes. Pull models with:
-
-```bash
-docker exec ollama ollama pull <model-name>
-docker exec ollama ollama list
-```
-
-See [models.md](models.md) for recommendations by use case and VRAM budget.
-
-## Using the LiteLLM Proxy
-
-The proxy at `:4000` speaks the OpenAI API. Any OpenAI-compatible tool works:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:4000",
-    api_key="sk-your-local-key"  # matches LITELLM_MASTER_KEY
-)
-
-response = client.chat.completions.create(
-    model="llama3.2",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
-```
-
-```bash
-# Or with curl
-curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-your-local-key" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "llama3.2", "messages": [{"role": "user", "content": "Hi"}]}'
-```
-
-## Multi-GPU Setup
-
-Ollama automatically detects and uses all available NVIDIA GPUs. For best multi-GPU performance:
-
-```yaml
-# In docker-compose.yml, ollama service:
-environment:
-  - OLLAMA_NUM_PARALLEL=8      # increase for more GPUs
-  - OLLAMA_MAX_LOADED_MODELS=3 # keep multiple models warm
-```
+| VRAM | Recommended Models |
+|------|-------------------|
+| 6GB | gemma4:9b, phi3.5 |
+| 8GB | gemma4:26b (MoE), llama3.2:8b |
+| 12GB | gemma4:26b (full GPU), mistral-nemo |
+| 24GB | llama3.3:70b-q4, deepseek-coder-v2 |
 
 ## Useful Commands
 
 ```bash
-# Check what's running
-docker compose ps
-
-# View logs
-docker compose logs -f ollama
-docker compose logs -f litellm
-
-# Pull a new model
-docker exec ollama ollama pull mistral
-
 # Check GPU usage
 nvidia-smi
 
-# Stop everything
-docker compose down
+# List loaded models
+ollama list
 
-# Full reset (removes model data)
-docker compose down -v
+# Pull a new model
+ollama pull gemma4:26b
+
+# Check running models
+ollama ps
+
+# View logs
+docker compose logs -f
 ```
-
-## Architecture Notes
-
-- **Ollama** handles all GPU inference. It supports automatic GPU layer splitting across multiple GPUs.
-- **Open WebUI** connects directly to Ollama for its chat UI but also supports external OpenAI/Anthropic APIs.
-- **LiteLLM** acts as a smart router — your apps point to one endpoint and it handles routing to local or cloud models based on `litellm-config.yaml`.
-
-## Tech Stack
-
-- **Ollama** — local model runner (supports GGUF, safetensors)
-- **Open WebUI** — feature-rich chat UI with RAG, tools, and multimodal support
-- **LiteLLM** — OpenAI-compatible proxy with load balancing and fallbacks
-- **Docker Compose** — orchestration
-- **NVIDIA Container Toolkit** — GPU passthrough to containers
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT
